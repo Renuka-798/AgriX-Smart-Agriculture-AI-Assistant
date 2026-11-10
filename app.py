@@ -3,7 +3,7 @@ import streamlit as st
 import bcrypt
 import joblib
 import pandas as pd
-import ollama
+from groq import Groq
 
 from language import translate
 
@@ -28,41 +28,47 @@ from predict_weather import (
 
 # ---------------- AI CHATBOT ----------------
 
+@st.cache_resource
+def get_groq_client():
+    return Groq(
+        api_key=st.secrets["GROQ_API_KEY"]
+    )
+
 def ask_agrix_chatbot(messages, language):
 
-    response = ollama.chat(
-        model="llama3.2:3b",
-        messages=[
-            {
-                "role": "system",
-                "content": f"""
+    latest_message = messages[-1]["content"].strip().lower()
+
+    # Instant greeting response
+    greetings = ["hi", "hello", "hey", "hii", "hlo"]
+
+    if latest_message in greetings:
+        return (
+            f"Hello! 🌱 Welcome to AgriX. "
+            f"How can I help you with farming today?"
+        )
+
+    client = get_groq_client()
+
+    system_prompt = f"""
 You are AgriX, a helpful AI agriculture assistant for farmers.
 
 The selected language is {language}.
-
 Always answer the farmer in {language}.
 
 Your responsibilities:
 
 1. Answer questions about crops, soil, irrigation,
    fertilizers, pests, plant diseases and farming.
-2. Use simple, clear language that farmers can understand.
+2. Use simple, clear language.
 3. Explain possible causes before suggesting solutions.
-4. Give practical steps the farmer can follow.
-5. Ask follow-up questions when important details are missing,
-   such as crop name, growth stage, symptoms, soil type,
-   location or recent rainfall.
-6. If a farmer describes a plant disease, explain possible
-   causes but do not claim a certain diagnosis without
-   sufficient evidence.
-7. Do not invent pesticide names, application rates,
-   fertilizer doses or guaranteed results.
-8. Encourage soil testing before making specific fertilizer
-   recommendations.
+4. Give practical steps farmers can follow.
+5. Ask follow-up questions when important details are missing.
+6. Do not claim a certain disease diagnosis without evidence.
+7. Do not invent pesticide names, doses or guaranteed results.
+8. Encourage soil testing before fertilizer recommendations.
 9. For severe crop damage, recommend contacting a local
    agricultural extension officer.
-10. If a question is unrelated to agriculture, politely explain
-    that your main purpose is agricultural help.
+10. Politely redirect unrelated questions to agriculture.
 
 Structure useful answers with:
 - Possible cause
@@ -71,11 +77,35 @@ Structure useful answers with:
 
 Be friendly, accurate and concise.
 """
-            }
-        ] + messages[-12:]
+
+    chat_history = [
+        {
+            "role": "system",
+            "content": system_prompt
+        }
+    ]
+
+    for message in messages[-6:]:
+
+        role = message["role"]
+
+        if role in ["user", "assistant"]:
+            chat_history.append({
+                "role": role,
+                "content": message["content"]
+            })
+
+    response = client.chat.completions.create(
+        model="openai/gpt-oss-20b",
+        messages=chat_history,
+        max_tokens=800,
+        temperature=0.5,
+        timeout=30
     )
 
-    return response["message"]["content"]
+    return response.choices[0].message.content
+
+
 
 
 # ---------------- LOAD ENCODERS ----------------
@@ -343,52 +373,49 @@ def dashboard():
         st.header(
             f"🌿 {translate('crop_disease', language)}"
         )
-
         uploaded_file = st.file_uploader(
             translate("upload_leaf", language),
-            type=["jpg", "jpeg", "png"]
+            type=["jpg", "jpeg", "png"],
+            key="disease_image_uploader"
         )
 
-        if uploaded_file:
+        if uploaded_file is not None:
+            from PIL import Image
+            import io
+            try:
+                image_bytes = uploaded_file.getvalue()
+                leaf_image = Image.open(
+                    io.BytesIO(image_bytes)
+                ).convert("RGB")
 
-            st.image(
-                uploaded_file,
-                caption=translate(
-                    "uploaded_image",
-                    language
-                ),
-                width=300
-            )
-
-            with open(
-                "temp_image.jpg",
-                "wb"
-            ) as f:
-
-                f.write(
-                    uploaded_file.getbuffer()
+                st.image(
+                    leaf_image,
+                    caption="Uploaded Leaf Image",
+                    width=350
                 )
 
+            except Exception as e:
+                st.error(f"Unable to display image: {e}")
             if st.button(
-                translate(
-                    "predict_disease",
-                    language
-                )
+                translate("predict_disease", language)
             ):
+                with open("temp_image.jpg", "wb") as f:
+                    f.write(image_bytes)
 
                 disease, confidence = predict_leaf_disease(
                     "temp_image.jpg"
                 )
 
                 st.success(
-                    f"{translate('detected_disease', language)}: "
-                    f"{disease}"
+                    f"{translate('detected_disease', language)}: {disease}"
                 )
 
                 st.info(
-                    f"{translate('confidence', language)}: "
-                    f"{confidence:.2f}%"
+                    f"{translate('confidence', language)}: {confidence:.2f}%"
                 )
+
+
+        
 
                 save_prediction(
                     st.session_state.username,
@@ -1570,10 +1597,16 @@ def dashboard():
                 )
 
             except Exception as e:
-
-                st.error(
-                    f"{translate('chatbot_error', language)}: {e}"
-                )
+                error_message = str(e)
+                if "503" in error_message or "UNAVAILABLE" in error_message:
+                    st.warning(
+                        "AgriX AI is temporarily busy. "
+                        "Please try asking your question again in a few moments."
+                    )
+                else:
+                    st.error(
+                        f"{translate('chatbot_error', language)}: {error_message}"
+                    )
 
     # =========================================================
     # PREDICTION HISTORY
