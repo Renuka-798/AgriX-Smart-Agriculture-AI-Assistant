@@ -1,0 +1,16 @@
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+
+.env
+.streamlit/secrets.toml
+
+*.db
+temp_image.jpg
+*.log
+
+datasets/
+
+trained_models/fertilizer_model.pkl
+trained_models/yield_model.pkl
