@@ -9,3 +9,4 @@ bcrypt==5.0.0
 requests==2.34.2
 Pillow==12.2.0
 ollama==0.6.3
+huggingface_hub
